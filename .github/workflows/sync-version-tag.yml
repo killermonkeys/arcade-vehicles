@@ -1,0 +1,27 @@
+name: Sync version tag
+
+# MakeCode bumps pxt.json and may create a local tag, but that tag often never
+# reaches GitHub. Treat pxt.json as source of truth and ensure vX.Y.Z exists.
+on:
+  push:
+    branches: [main]
+    paths:
+      - pxt.json
+      - scripts/sync-version-tag.sh
+      - .github/workflows/sync-version-tag.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag from pxt.json
+        run: bash scripts/sync-version-tag.sh --push
