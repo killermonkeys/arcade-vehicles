@@ -43,11 +43,20 @@ namespace waypoints {
         sprite: Sprite;
         currentIndex: number;
         thresholdDistance: number;
+        // The sprite's last non-zero movement heading (radians), remembered
+        // so headingDifference still has something sensible to steer by
+        // once the sprite comes to a stop and vx/vy both drop to 0 - at
+        // which point atan2(0, 0) would otherwise always come out as 0
+        // (facing right) regardless of which way the sprite actually last
+        // faced. Defaults to 0, same as a freshly-tracked sprite's rotation
+        // in the "Sprite FX" extension.
+        lastHeading: number;
 
         constructor(sprite: Sprite, currentIndex: number, thresholdDistance: number) {
             this.sprite = sprite;
             this.currentIndex = currentIndex;
             this.thresholdDistance = thresholdDistance;
+            this.lastHeading = 0;
         }
     }
 
@@ -570,11 +579,24 @@ namespace waypoints {
         return a;
     }
 
-    function headingDifference(list: WaypointList, sprite: Sprite): number {
-        const target = currentWaypoint(list, sprite);
-        if (!target) return 0;
+    // Sprites have no built-in "facing angle" while stationary - only a
+    // velocity, which goes to (0, 0) whenever the sprite isn't moving. So
+    // while it's moving, take the heading straight from velocity (and
+    // remember it); once it stops, keep reporting that remembered heading
+    // instead of letting atan2(0, 0) collapse it to 0.
+    function spriteHeading(sprite: Sprite, follower: Follower): number {
+        if (sprite.vx !== 0 || sprite.vy !== 0) {
+            follower.lastHeading = Math.atan2(sprite.vy, sprite.vx);
+        }
+        return follower.lastHeading;
+    }
 
-        const heading = Math.atan2(sprite.vy, sprite.vx);
+    function headingDifference(list: WaypointList, sprite: Sprite): number {
+        const follower = findFollower(list, sprite);
+        if (!follower) return 0;
+
+        const target = list.locations[follower.currentIndex];
+        const heading = spriteHeading(sprite, follower);
         const toTarget = angleTo(sprite, target);
         return normalizeAngle(toTarget - heading);
     }
