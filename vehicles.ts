@@ -2,20 +2,15 @@
  * Top-down vehicle physics for MakeCode Arcade.
  *
  * A Vehicle wraps a Sprite and owns the angle (orientation and velocity
- * direction), speed, accel/brake power, and lateral grip. Call drive each
- * tick with turn (-1/0/+1) and accel (-1/0/+1) signals - the same ones
- * waypoints.planTurn / planAccel produce - and it applies turning,
- * acceleration, tile-surface modifiers, then updates the sprite's
- * velocity and facing image.
+ * direction), speed, accel/brake power, and turning (maxTurnRate +
+ * handling). Call drive each tick with turn (-1/0/+1) and accel (-1/0/+1)
+ * signals - the same ones waypoints.planTurn / planAccel produce - and it
+ * applies turning, acceleration, tile-surface modifiers, then updates the
+ * sprite's velocity and facing image.
  */
 //% color="#2E7D5B" icon="\uf1b9" block="Vehicles"
 //% groups=['Vehicle', 'Surfaces']
 namespace vehicles {
-    // Piecewise turn-rate curve (degrees at reference maxTurnRate of 10°),
-    // matched to the classic arcade car bands, scaled by maxTurnRate / 10.
-    const TURN_SPEEDS = [0, 20, 50, 100, 150, 200];
-    const TURN_DEGREES = [10, 10, 8, 5, 2, 0];
-
     class SurfaceProps {
         grip: number;
         traction: number;
@@ -53,10 +48,13 @@ namespace vehicles {
         accelPower: number;
         // Positive speed loss per drive step when braking.
         brakePower: number;
-        lateralGrip: number;
         maxSpeed: number;
-        // Peak turn rate in radians/step at low speed (default ≈ 10°).
+        // Peak turn rate in radians/step at speed 0 (default ≈ 10°).
         maxTurnRate: number;
+        // How quickly turn rate falls off as speed approaches maxSpeed.
+        // turnRate = maxTurnRate * (1 - speed/maxSpeed)^handling
+        // 1 = linear; <1 keeps more turn at high speed; >1 loses turn sooner.
+        handling: number;
         // Unrotated image used to rebuild the facing sprite each drive step.
         originalImage: Image;
 
@@ -67,9 +65,9 @@ namespace vehicles {
             this.speed = 0;
             this.accelPower = 2;
             this.brakePower = 5;
-            this.lateralGrip = 1;
             this.maxSpeed = 200;
             this.maxTurnRate = degreesToRadians(10);
+            this.handling = 1;
         }
     }
 
@@ -178,29 +176,15 @@ namespace vehicles {
     }
 
     /**
-     * Set the vehicle's base lateral grip (turn multiplier). Default 1;
-     * lower makes the vehicle turn less; higher makes it turn more.
-     */
-    //% blockId=vehicles_set_grip
-    //% block="set $vehicle lateral grip to $grip"
-    //% vehicle.shadow=variables_get
-    //% vehicle.defl=myVehicle
-    //% grip.defl=1
-    //% group="Vehicle" weight=85 blockGap=8
-    export function setLateralGrip(vehicle: Vehicle, grip: number): void {
-        if (!vehicle) return;
-        vehicle.lateralGrip = grip;
-    }
-
-    /**
-     * Set the vehicle's maximum speed.
+     * Set the vehicle's maximum speed. Turn rate falls to zero as speed
+     * approaches this value.
      */
     //% blockId=vehicles_set_max_speed
     //% block="set $vehicle max speed to $maxSpeed"
     //% vehicle.shadow=variables_get
     //% vehicle.defl=myVehicle
     //% maxSpeed.defl=200
-    //% group="Vehicle" weight=84 blockGap=8
+    //% group="Vehicle" weight=85 blockGap=8
     export function setMaxSpeed(vehicle: Vehicle, maxSpeed: number): void {
         if (!vehicle) return;
         vehicle.maxSpeed = Math.max(0, maxSpeed);
@@ -208,18 +192,36 @@ namespace vehicles {
     }
 
     /**
-     * Set the peak turn rate in degrees per drive step at low speed.
-     * The turn curve scales with this value (default 10°).
+     * Set the peak turn rate in degrees per drive step at speed 0 (default 10°).
+     * Actual turn rate falls toward zero as speed approaches max speed,
+     * shaped by handling.
      */
     //% blockId=vehicles_set_max_turn_rate
     //% block="set $vehicle max turn rate to $degrees degrees"
     //% vehicle.shadow=variables_get
     //% vehicle.defl=myVehicle
     //% degrees.defl=10
-    //% group="Vehicle" weight=83 blockGap=8
+    //% group="Vehicle" weight=84 blockGap=8
     export function setMaxTurnRate(vehicle: Vehicle, degrees: number): void {
         if (!vehicle) return;
         vehicle.maxTurnRate = degreesToRadians(Math.max(0, degrees));
+    }
+
+    /**
+     * Set how quickly turn rate falls off with speed (default 1 = linear).
+     * Values below 1 keep more steering at high speed; values above 1
+     * lose steering sooner. Always clamped to at least a small positive
+     * number so the power curve stays well-defined.
+     */
+    //% blockId=vehicles_set_handling
+    //% block="set $vehicle handling to $handling"
+    //% vehicle.shadow=variables_get
+    //% vehicle.defl=myVehicle
+    //% handling.defl=1
+    //% group="Vehicle" weight=83 blockGap=8
+    export function setHandling(vehicle: Vehicle, handling: number): void {
+        if (!vehicle) return;
+        vehicle.handling = Math.max(0.01, handling);
     }
 
     /**
@@ -244,8 +246,8 @@ namespace vehicles {
         const surface = surfaceUnder(vehicle.sprite);
 
         if (turn !== 0 && vehicle.speed > 0) {
-            const rate = turnRateAtSpeed(vehicle.speed, vehicle.maxTurnRate, vehicle.maxSpeed);
-            vehicle.angle = vehicle.angle + rate * vehicle.lateralGrip * surface.grip * turn;
+            const rate = turnRateAtSpeed(vehicle.speed, vehicle.maxSpeed, vehicle.maxTurnRate, vehicle.handling);
+            vehicle.angle = vehicle.angle + rate * surface.grip * turn;
         }
 
         if (accel > 0) {
@@ -303,30 +305,11 @@ namespace vehicles {
         return Math.min(max, Math.max(min, value));
     }
 
-    function turnRateAtSpeed(speed: number, maxTurnRate: number, maxSpeed: number): number {
-        // Scale the reference curve (degrees at 10° peak) by maxTurnRate / 10°,
-        // and stretch speed breakpoints relative to maxSpeed / 200.
-        const speedScale = maxSpeed > 0 ? maxSpeed / 200 : 1;
-        const rateScale = maxTurnRate / degreesToRadians(10);
-
-        const scaledSpeed = speedScale > 0 ? speed / speedScale : speed;
-        const degrees = interpolateTurnDegrees(scaledSpeed);
-        return degreesToRadians(degrees) * rateScale;
-    }
-
-    function interpolateTurnDegrees(speed: number): number {
-        if (speed <= TURN_SPEEDS[0]) return TURN_DEGREES[0];
-        for (let i = 1; i < TURN_SPEEDS.length; i++) {
-            if (speed <= TURN_SPEEDS[i]) {
-                const t0 = TURN_SPEEDS[i - 1];
-                const t1 = TURN_SPEEDS[i];
-                const d0 = TURN_DEGREES[i - 1];
-                const d1 = TURN_DEGREES[i];
-                const t = (speed - t0) / (t1 - t0);
-                return d0 + (d1 - d0) * t;
-            }
-        }
-        return TURN_DEGREES[TURN_DEGREES.length - 1];
+    // Peak turn at speed 0, zero at maxSpeed: maxTurnRate * (1 - speed/maxSpeed)^handling
+    function turnRateAtSpeed(speed: number, maxSpeed: number, maxTurnRate: number, handling: number): number {
+        if (maxSpeed <= 0 || speed >= maxSpeed) return 0;
+        const t = clamp(speed / maxSpeed, 0, 1);
+        return maxTurnRate * Math.pow(1 - t, handling);
     }
 
     function surfaceUnder(sprite: Sprite): SurfaceProps {

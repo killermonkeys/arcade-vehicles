@@ -55,16 +55,21 @@ A `vehicles.Vehicle` wraps a sprite and owns:
 | `angle` | radians; orientation **and** velocity direction |
 | `speed` | magnitude (≥ 0) |
 | `accelPower` / `brakePower` | speed change per `drive` step (`brakePower` is positive) |
-| `lateralGrip` | base turn multiplier (default 1) |
-| `maxSpeed` | clamp (default 200) |
-| `maxTurnRate` | peak turn rate at low speed (default 10°) |
+| `maxSpeed` | clamp; also the speed at which turn rate reaches zero (default 200) |
+| `maxTurnRate` | peak turn rate at speed 0 (default 10°) |
+| `handling` | how fast turn falls off with speed (default 1 = linear) |
 
 ### Driving
 
 `vehicles.drive(vehicle, turn, accel)` runs one physics step:
 
 1. Looks up the **surface** under the sprite (see below).
-2. Turns if `turn ≠ 0` and `speed > 0`, using a speed-dependent turn curve (high turn rate at low speed → near zero near max speed), scaled by `lateralGrip`, surface grip, and `maxTurnRate`.
+2. Turns if `turn ≠ 0` and `speed > 0`:
+   `turnRate = maxTurnRate × (1 − speed/maxSpeed)^handling × surface.grip`.
+   So steering is strongest when slow and fades to none at max speed.
+   Raise `maxTurnRate` for sharper low-speed steering; lower `handling`
+   (e.g. `0.5`) to keep more turn at high speed, or raise it (e.g. `2`)
+   for a vehicle that washes out sooner.
 3. Accelerates or brakes using `accelPower` / `brakePower` × surface traction.
 4. Subtracts surface friction (additive drain).
 5. Sets `vx`/`vy` from angle + speed and rotates the sprite image to match.
@@ -137,7 +142,7 @@ Paints onto the **active** tilemap and restores whatever tile was really there (
 - `vehicles.setAngle` / `angle` (degrees in blocks)
 - `vehicles.setSpeed` / `speed`
 - `vehicles.setPowers(vehicle, accelPower, brakePower)`
-- `vehicles.setLateralGrip` / `setMaxSpeed` / `setMaxTurnRate`
+- `vehicles.setMaxSpeed` / `setMaxTurnRate` / `setHandling`
 - `vehicles.drive(vehicle, turn, accel)`
 - `vehicles.setSurface(tile, grip, traction, friction)`
 
