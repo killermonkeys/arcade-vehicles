@@ -139,6 +139,10 @@ waypoints.onFinishCrossed(function (vehicle, fullLap) {
         // First crossing starts the first timed lap, or the car skipped gates.
     }
 })
+
+waypoints.onWaypointReached(function (list, sprite, index) {
+    // Fired when a vehicle crosses a gate and advances to `index`.
+})
 ```
 
 `upward = true` means the valid crossing direction is toward the top of the screen; `false` means toward the bottom. The first finish crossing for a vehicle always reports `fullLap = false`. Later crossings report `true` only if that vehicle crossed every active waypoint gate in order since its previous finish crossing.
@@ -185,3 +189,12 @@ Lap counts, lap timing, and deciding the winner are intentionally left to the ga
 
 * for PXT/arcade
 (The metadata above is needed for package search.)
+
+## Testing
+
+Unit checks live in `test.ts`, listed only under `testFiles` in `pxt.json`. MakeCode **does not** ship `testFiles` when this repo is added as an extension — they only compile when you open/build this project itself.
+
+- `mise run test` (same as `mkc build`) typechecks/compiles the tests with the extension.
+- To execute them, open this repository in the MakeCode Arcade editor and run the simulator; a passing run shows `tests passed`.
+
+`waypoints.__testing` helpers used by the tests have no blocks, so they do not appear in the Toolbox for games that import the extension.

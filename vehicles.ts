@@ -318,7 +318,8 @@ namespace vehicles {
 
         const surface = surfaceUnder(vehicle.sprite);
 
-        if (turn !== 0 && vehicle.speed > 0) {
+        // Allow turning while stopped so AI can face the next gate from rest.
+        if (turn !== 0) {
             const rate = turnRateAtSpeed(vehicle.speed, vehicle.maxSpeed, vehicle.maxTurnRate, vehicle.handling);
             vehicle.angle = vehicle.angle + rate * surface.grip * turn;
         }

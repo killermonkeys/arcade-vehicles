@@ -4,6 +4,9 @@ node = "lts"
 
 [tasks]
 build = "mkc build"
+# Compiles test.ts (pxt.json testFiles). Open this repo in the Arcade editor
+# and run the simulator to execute the asserts; consumers never get test.ts.
+test = "mkc build"
 # Create local tag vX.Y.Z from pxt.json (add --push to publish)
 sync-version-tag = "bash scripts/sync-version-tag.sh"
 sync-version-tag-push = "bash scripts/sync-version-tag.sh --push"

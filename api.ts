@@ -21,25 +21,21 @@ namespace waypoints {
         locations: tiles.Location[];
         tilemap: tiles.TileMapData;
         progress: VehicleProgress[];
-        changeHandlers: ((sprite: Sprite, index: number) => void)[];
         gateHalfWidth: number;
         gateColors: number[];
         active: boolean;
         drawGateLines: boolean;
         tickerStarted: boolean;
-        paintStarted: boolean;
 
         constructor(locations: tiles.Location[], tilemap: tiles.TileMapData) {
             this.locations = locations;
             this.tilemap = tilemap;
             this.progress = [];
-            this.changeHandlers = [];
             this.gateHalfWidth = 16;
             this.gateColors = [];
             this.active = false;
             this.drawGateLines = false;
             this.tickerStarted = false;
-            this.paintStarted = false;
         }
     }
 
@@ -68,6 +64,9 @@ namespace waypoints {
         py: number;
         nx: number;
         ny: number;
+        gx: number;
+        gy: number;
+        halfWidth: number;
     }
 
     class FinishLine {
@@ -93,12 +92,14 @@ namespace waypoints {
         }
     }
 
-    const DEBUG_COLORS = [2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14];
+    const DEBUG_COLORS = [1, 3, 4, 5, 7, 8, 9, 10, 2, 6, 11, 12, 14];
     const activeLists: WaypointList[] = [];
+    const waypointReachedHandlers: ((list: WaypointList, sprite: Sprite, index: number) => void)[] = [];
     const finishHandlers: ((vehicle: vehicles.Vehicle, fullLap: boolean) => void)[] = [];
     const finishProgress: FinishProgress[] = [];
     let finishLine: FinishLine = undefined;
     let finishTickerStarted = false;
+    let gatePainterStarted = false;
 
     /**
      * Scan a tilemap for the given sequence of marker tile colours and
@@ -175,7 +176,9 @@ namespace waypoints {
     //% group="Driving" weight=85 blockGap=8
     export function distanceTo(sprite: Sprite, location: tiles.Location): number {
         if (!sprite || !location) return 0;
-        return Math.sqrt((location.x - sprite.x) * (location.x - sprite.x) + (location.y - sprite.y) * (location.y - sprite.y));
+        const lx = locationCenterX(location);
+        const ly = locationCenterY(location);
+        return Math.sqrt((lx - sprite.x) * (lx - sprite.x) + (ly - sprite.y) * (ly - sprite.y));
     }
 
     /**
@@ -190,7 +193,7 @@ namespace waypoints {
     //% group="Driving" weight=84 blockGap=8
     export function angleTo(sprite: Sprite, location: tiles.Location): number {
         if (!sprite || !location) return 0;
-        return toDegrees(Math.atan2(location.y - sprite.y, location.x - sprite.x));
+        return toDegrees(Math.atan2(locationCenterY(location) - sprite.y, locationCenterX(location) - sprite.x));
     }
 
     /**
@@ -286,18 +289,18 @@ namespace waypoints {
     }
 
     /**
-     * Run some code whenever a vehicle following this waypoint list reaches
-     * its current waypoint and advances to the next one.
-     * @param list the waypoint list, from waypoints.buildTrack
-     * @param handler code to run, given the vehicle's sprite and its new waypoint index
+     * Run some code whenever a vehicle crosses a waypoint gate and advances.
+     * The handler receives the waypoint list, the vehicle's sprite, and the
+     * new waypoint index (the next gate to cross).
+     * @param handler code to run on each gate advance
      */
     //% blockId=waypoints_on_waypoint_reached
-    //% block="on waypoint reached of $list"
+    //% block="on waypoint reached"
     //% draggableParameters="reporter"
     //% group="Events" weight=60 blockGap=8
-    export function onWaypointReached(list: WaypointList, handler: (sprite: Sprite, index: number) => void): void {
-        if (!list || !handler) return;
-        list.changeHandlers.push(handler);
+    export function onWaypointReached(handler: (list: WaypointList, sprite: Sprite, index: number) => void): void {
+        if (!handler) return;
+        waypointReachedHandlers.push(handler);
     }
 
     /**
@@ -308,13 +311,14 @@ namespace waypoints {
      */
     //% blockId=waypoints_draw_gates
     //% block="draw gates for $list $enabled"
+    //% enabled.shadow="toggleOnOff"
     //% enabled.defl=true
     //% group="Debug" weight=50 blockGap=8
     export function drawGates(list: WaypointList, enabled: boolean): void {
         if (!list) return;
-        list.drawGateLines = enabled;
+        list.drawGateLines = !!enabled;
         initGateColors(list);
-        ensurePainter(list);
+        ensureGatePainter();
     }
 
     /**
@@ -335,8 +339,12 @@ namespace waypoints {
     //% group="Events" weight=58 blockGap=8
     export function setFinishLine(tileA: tiles.Location, tileB: tiles.Location, upward: boolean): void {
         if (!tileA || !tileB) return;
-        const dx = tileB.x - tileA.x;
-        const dy = tileB.y - tileA.y;
+        const ax = locationCenterX(tileA);
+        const ay = locationCenterY(tileA);
+        const bx = locationCenterX(tileB);
+        const by = locationCenterY(tileB);
+        const dx = bx - ax;
+        const dy = by - ay;
         const mag = Math.sqrt(dx * dx + dy * dy);
         if (mag <= 0) return;
 
@@ -344,15 +352,16 @@ namespace waypoints {
         const ny1 = dx / mag;
         const nx2 = -nx1;
         const ny2 = -ny1;
+        // Arcade y grows downward, so "up on screen" means the smaller ny.
         const pickFirst = Math.abs(ny1 - ny2) > 0.001
             ? (upward ? ny1 < ny2 : ny1 > ny2)
             : (upward ? nx1 < nx2 : nx1 > nx2);
 
         finishLine = new FinishLine();
-        finishLine.x1 = tileA.x;
-        finishLine.y1 = tileA.y;
-        finishLine.x2 = tileB.x;
-        finishLine.y2 = tileB.y;
+        finishLine.x1 = ax;
+        finishLine.y1 = ay;
+        finishLine.x2 = bx;
+        finishLine.y2 = by;
         finishLine.nx = pickFirst ? nx1 : nx2;
         finishLine.ny = pickFirst ? ny1 : ny2;
         ensureFinishTicker();
@@ -529,26 +538,36 @@ namespace waypoints {
     }
 
     function fireWaypointReached(list: WaypointList, sprite: Sprite, index: number): void {
-        for (let i = 0; i < list.changeHandlers.length; i++) {
-            list.changeHandlers[i](sprite, index);
+        for (let i = 0; i < waypointReachedHandlers.length; i++) {
+            waypointReachedHandlers[i](list, sprite, index);
         }
     }
 
-    function ensurePainter(list: WaypointList): void {
-        if (list.paintStarted) return;
-        list.paintStarted = true;
-        game.onPaint(function () {
-            if (!list.drawGateLines || !list.locations || list.locations.length === 0) return;
-            const left = scene.cameraProperty(CameraProperty.Left);
-            const top = scene.cameraProperty(CameraProperty.Top);
-            for (let i = 0; i < list.locations.length; i++) {
-                const gate = gateForIndex(list, i);
-                screen.drawLine(
-                    Math.round(gate.x1 - left),
-                    Math.round(gate.y1 - top),
-                    Math.round(gate.x2 - left),
-                    Math.round(gate.y2 - top),
-                    gateColor(list, i)
+    function ensureGatePainter(): void {
+        if (gatePainterStarted) return;
+        gatePainterStarted = true;
+        scene.createRenderable(100, function (target: Image, camera: scene.Camera) {
+            for (let li = 0; li < activeLists.length; li++) {
+                const list = activeLists[li];
+                if (!list.drawGateLines || !list.locations || list.locations.length === 0) continue;
+                for (let i = 0; i < list.locations.length; i++) {
+                    const gate = gateForIndex(list, i);
+                    target.drawLine(
+                        Math.round(gate.x1 - camera.drawOffsetX),
+                        Math.round(gate.y1 - camera.drawOffsetY),
+                        Math.round(gate.x2 - camera.drawOffsetX),
+                        Math.round(gate.y2 - camera.drawOffsetY),
+                        gateColor(list, i)
+                    );
+                }
+            }
+            if (finishLine) {
+                target.drawLine(
+                    Math.round(finishLine.x1 - camera.drawOffsetX),
+                    Math.round(finishLine.y1 - camera.drawOffsetY),
+                    Math.round(finishLine.x2 - camera.drawOffsetX),
+                    Math.round(finishLine.y2 - camera.drawOffsetY),
+                    1
                 );
             }
         });
@@ -573,20 +592,44 @@ namespace waypoints {
         list.gateColors[index] = DEBUG_COLORS[(slot + 1) % DEBUG_COLORS.length];
     }
 
+    function tilePixelSize(): number {
+        const sceneMap = game.currentScene().tileMap;
+        if (sceneMap && sceneMap.scale > 0) return 1 << sceneMap.scale;
+        return 16;
+    }
+
+    // buildTrack stores Locations with a null map, so .x/.y are unreliable.
+    // Always derive pixel centres from column/row + the active tile size.
+    function locationCenterX(loc: tiles.Location): number {
+        const size = tilePixelSize();
+        return loc.column * size + (size >> 1);
+    }
+
+    function locationCenterY(loc: tiles.Location): number {
+        const size = tilePixelSize();
+        return loc.row * size + (size >> 1);
+    }
+
     function gateForIndex(list: WaypointList, index: number): GateSegment {
         const count = list.locations.length;
         const current = list.locations[index];
         const previous = list.locations[(index - 1 + count) % count];
-        let tx = current.x - previous.x;
-        let ty = current.y - previous.y;
+        const cx = locationCenterX(current);
+        const cy = locationCenterY(current);
+        let tx = cx - locationCenterX(previous);
+        let ty = cy - locationCenterY(previous);
         let mag = Math.sqrt(tx * tx + ty * ty);
         if (mag <= 0 && count > 1) {
             const next = list.locations[(index + 1) % count];
-            tx = next.x - current.x;
-            ty = next.y - current.y;
+            tx = locationCenterX(next) - cx;
+            ty = locationCenterY(next) - cy;
             mag = Math.sqrt(tx * tx + ty * ty);
         }
-        if (mag <= 0) mag = 1;
+        if (mag <= 0) {
+            tx = 1;
+            ty = 0;
+            mag = 1;
+        }
 
         const nx = tx / mag;
         const ny = ty / mag;
@@ -594,14 +637,17 @@ namespace waypoints {
         const gy = nx;
         const half = list.gateHalfWidth;
         const gate = new GateSegment();
-        gate.px = current.x;
-        gate.py = current.y;
+        gate.px = cx;
+        gate.py = cy;
         gate.nx = nx;
         gate.ny = ny;
-        gate.x1 = current.x - gx * half;
-        gate.y1 = current.y - gy * half;
-        gate.x2 = current.x + gx * half;
-        gate.y2 = current.y + gy * half;
+        gate.gx = gx;
+        gate.gy = gy;
+        gate.halfWidth = half;
+        gate.x1 = cx - gx * half;
+        gate.y1 = cy - gy * half;
+        gate.x2 = cx + gx * half;
+        gate.y2 = cy + gy * half;
         return gate;
     }
 
@@ -609,23 +655,18 @@ namespace waypoints {
         if (!gate) return false;
         const side1 = (x1 - gate.px) * gate.nx + (y1 - gate.py) * gate.ny;
         const side2 = (x2 - gate.px) * gate.nx + (y2 - gate.py) * gate.ny;
+        // Must move from behind the gate to on/through it.
         if (!(side1 < -0.001 && side2 >= -0.001)) return false;
-        return segmentsIntersect(x1, y1, x2, y2, gate.x1, gate.y1, gate.x2, gate.y2);
-    }
 
-    function segmentsIntersect(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
-        const rx = bx - ax;
-        const ry = by - ay;
-        const sx = dx - cx;
-        const sy = dy - cy;
-        const denom = rx * sy - ry * sx;
+        const denom = side1 - side2;
         if (Math.abs(denom) < 0.0001) return false;
+        const t = side1 / denom;
+        if (t < 0 || t > 1) return false;
 
-        const qpx = cx - ax;
-        const qpy = cy - ay;
-        const t = (qpx * sy - qpy * sx) / denom;
-        const u = (qpx * ry - qpy * rx) / denom;
-        return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+        const crossX = x1 + t * (x2 - x1);
+        const crossY = y1 + t * (y2 - y1);
+        const along = (crossX - gate.px) * gate.gx + (crossY - gate.py) * gate.gy;
+        return Math.abs(along) <= gate.halfWidth + 0.5;
     }
 
     function newBooleanArray(length: number): boolean[] {
@@ -683,15 +724,21 @@ namespace waypoints {
             if (!sprite || !progress) continue;
 
             if (finishLine) {
+                const abx = finishLine.x2 - finishLine.x1;
+                const aby = finishLine.y2 - finishLine.y1;
+                const abLen = Math.sqrt(abx * abx + aby * aby);
                 const gate = new GateSegment();
                 gate.x1 = finishLine.x1;
                 gate.y1 = finishLine.y1;
                 gate.x2 = finishLine.x2;
                 gate.y2 = finishLine.y2;
-                gate.px = finishLine.x1;
-                gate.py = finishLine.y1;
+                gate.px = (finishLine.x1 + finishLine.x2) * 0.5;
+                gate.py = (finishLine.y1 + finishLine.y2) * 0.5;
                 gate.nx = finishLine.nx;
                 gate.ny = finishLine.ny;
+                gate.gx = abLen > 0 ? abx / abLen : 1;
+                gate.gy = abLen > 0 ? aby / abLen : 0;
+                gate.halfWidth = abLen * 0.5;
 
                 if (crossedForwardSegment(progress.lastX, progress.lastY, sprite.x, sprite.y, gate)) {
                     const fullLap = progress.crossCount > 0 && hasCompleteGateProgress(vehicle);
@@ -730,5 +777,55 @@ namespace waypoints {
         const target = list.locations[progress.currentIndex];
         const toTarget = angleTo(vehicle.sprite, target);
         return normalizeAngle(toTarget - vehicle.angle);
+    }
+
+    /**
+     * Test-only helpers. These have no //% block annotations, so they do not
+     * appear in the MakeCode Toolbox. Prefer using them from test.ts only.
+     */
+    export namespace __testing {
+        // Gate facing +x through (px, py): previous point is to the left.
+        export function crossesGateFacingRight(
+            x1: number, y1: number, x2: number, y2: number,
+            px: number, py: number, halfWidth: number
+        ): boolean {
+            const gate = new GateSegment();
+            gate.px = px;
+            gate.py = py;
+            gate.nx = 1;
+            gate.ny = 0;
+            gate.gx = 0;
+            gate.gy = 1;
+            gate.halfWidth = halfWidth;
+            gate.x1 = px;
+            gate.y1 = py - halfWidth;
+            gate.x2 = px;
+            gate.y2 = py + halfWidth;
+            return crossedForwardSegment(x1, y1, x2, y2, gate);
+        }
+
+        // Finish-style segment from (ax,ay)-(bx,by) with chosen forward normal.
+        export function crossesFinish(
+            x1: number, y1: number, x2: number, y2: number,
+            ax: number, ay: number, bx: number, by: number,
+            nx: number, ny: number
+        ): boolean {
+            const abx = bx - ax;
+            const aby = by - ay;
+            const abLen = Math.sqrt(abx * abx + aby * aby);
+            const gate = new GateSegment();
+            gate.x1 = ax;
+            gate.y1 = ay;
+            gate.x2 = bx;
+            gate.y2 = by;
+            gate.px = (ax + bx) * 0.5;
+            gate.py = (ay + by) * 0.5;
+            gate.nx = nx;
+            gate.ny = ny;
+            gate.gx = abLen > 0 ? abx / abLen : 1;
+            gate.gy = abLen > 0 ? aby / abLen : 0;
+            gate.halfWidth = abLen * 0.5;
+            return crossedForwardSegment(x1, y1, x2, y2, gate);
+        }
     }
 }
